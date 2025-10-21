@@ -1,0 +1,92 @@
+int ledPins[6]={8,9,10,11,12,13};
+String comanda="";
+void setup(){
+  Serial.begin(9600);
+  for(int i=0; i<6; i++)
+  {
+    pinMode(ledPins[i],OUTPUT);
+    digitalWrite(ledPins[i],LOW);
+  }
+  Serial.println("structura comenzii: <start-stop,blink/fadein/fadeout,durata>");
+}
+
+void loop(){
+  if(Serial.available())
+  {
+    char c=Serial.read();
+    
+    if(c == '\n' || c == '\r')
+    {
+      if(comanda.length() > 0)
+      {
+        executa(comanda);
+        comanda = "";
+      }
+    }
+    else 
+    {
+      comanda += c;
+    }
+  }
+}
+
+void executa(String cmd){
+  int virg1 = cmd.indexOf(',');
+  int virg2 = cmd.indexOf(',',virg1+1);
+
+  String range = cmd.substring(0,virg1);
+  String program = cmd.substring(virg1+1,virg2);
+  String param = cmd.substring(virg2+1);
+
+  int delay = param.toInt();
+
+  int delim = range.indexOf('-');
+  int start;
+  int stop;
+
+  if(delim == -1)
+  {
+    start = stop = range.toInt();
+  }
+  else 
+  {
+    start = range.substring(0,delim).toInt();
+    stop = range.substring(delim+1).toInt();
+  }
+  start = ledPins[start];
+  stop = ledPins[stop];
+
+  for(int i=start; i <= stop; i++)
+  {
+    if(program == "blink")
+    f_blink(start, delay);
+    else if (program == "fadein")
+    f_fadein(start, delay);
+    else if (program == "fadeout")
+    f_fadeout(start, delay);
+  }
+}
+
+void f_blink(int s, int d)
+{
+  digitalWrite(s, HIGH);
+  delay(d);
+  digitalWrite(s,LOW);
+  delay(d);
+}
+
+void f_fadein(int s, int d)
+{
+     for (int val = 0; val <= 255; val++) {
+    analogWrite(s, val);
+    delay(d / 255);
+  }
+}
+
+void f_fadeout(int s, int d)
+{
+     for (int val = 255; val > 0; val--) {
+    analogWrite(s, val);
+    delay(d / 255);
+  }
+}
