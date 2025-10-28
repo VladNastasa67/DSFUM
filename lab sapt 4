@@ -1,0 +1,42 @@
+c++ void setup ()
+{
+  pinMode(4,OUTPUT); 
+  pinMode(7,OUTPUT); 
+  pinMode(8,OUTPUT); 
+}
+ 
+void loop()
+{
+  afiseazaValoare(0b11000000, 241); 
+  delay(1000);
+  afiseazaValoare(0b11111001, 241); 
+  delay(1000);
+  afiseazaValoare(0b10100100, 241); 
+  delay(1000);
+  afiseazaValoare(0b10110000, 241); 
+  delay(1000);
+  afiseazaValoare(0b10011001, 241); 
+  delay(1000);
+  afiseazaValoare(0b10010010, 241); 
+  delay(1000);
+  afiseazaValoare(0b10000010, 241); 
+  delay(1000);
+  afiseazaValoare(0b11111000, 241); 
+  delay(1000);
+  afiseazaValoare(0b10000000, 241); 
+  delay(1000);
+  afiseazaValoare(0b10010000, 241); 
+  delay(1000);
+  
+  
+
+}
+ 
+
+void afiseazaValoare(byte valoare, byte segment)
+{
+  digitalWrite(4,LOW); //latch
+  shiftOut(8, 7, MSBFIRST, valoare);
+  shiftOut(8, 7, MSBFIRST, segment);
+  digitalWrite(4,HIGH); //latch
+} 
