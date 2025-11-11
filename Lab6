@@ -1,0 +1,122 @@
+#include <LedControl.h>
+
+const int DIN_PIN  = 12;
+const int CLK_PIN  = 11;
+const int CS_PIN   = 10;
+
+LedControl lc = LedControl(DIN_PIN, CLK_PIN, CS_PIN, 1);
+
+const byte N = 8;
+const unsigned long STEP_DELAY = 200;
+
+bool board[N][N];
+bool nextBoard[N][N];
+bool prevBoard[N][N];
+
+unsigned long lastStep = 0;
+
+void clearBoard(bool b[N][N]) {
+  for (byte y = 0; y < N; y++)
+    for (byte x = 0; x < N; x++)
+      b[y][x] = false;
+}
+
+void copyBoard(bool dst[N][N], bool src[N][N]) {
+  for (byte y = 0; y < N; y++)
+    for (byte x = 0; x < N; x++)
+      dst[y][x] = src[y][x];
+}
+
+bool equalBoards(bool a[N][N], bool b[N][N]) {
+  for (byte y = 0; y < N; y++)
+    for (byte x = 0; x < N; x++)
+      if (a[y][x] != b[y][x])
+        return false;
+  return true;
+}
+
+bool allDead(bool b[N][N]) {
+  for (byte y = 0; y < N; y++)
+    for (byte x = 0; x < N; x++)
+      if (b[y][x]) return false;
+  return true;
+}
+
+byte countNeighbors(bool b[N][N], byte x, byte y) {
+  byte cnt = 0;
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      if (dx == 0 && dy == 0) continue;
+      int nx = x + dx;
+      int ny = y + dy;
+      if (nx < 0 || nx >= N || ny < 0 || ny >= N) continue;
+      if (b[ny][nx]) cnt++;
+    }
+  }
+  return cnt;
+}
+
+void drawBoard(bool b[N][N]) {
+  for (byte y = 0; y < N; y++) {
+    for (byte x = 0; x < N; x++) {
+      lc.setLed(0, y, x, b[y][x]);
+    }
+  }
+}
+
+void randomBoard(bool b[N][N]) {
+  do {
+    for (byte y = 0; y < N; y++) {
+      for (byte x = 0; x < N; x++) {
+        b[y][x] = random(2);
+      }
+    }
+  } while (allDead(b));
+}
+
+void stepGame() {
+  for (byte y = 0; y < N; y++) {
+    for (byte x = 0; x < N; x++) {
+      byte neighbors = countNeighbors(board, x, y);
+      bool alive = board[y][x];
+      if (alive)
+        nextBoard[y][x] = (neighbors == 2 || neighbors == 3);
+      else
+        nextBoard[y][x] = (neighbors == 3);
+    }
+  }
+
+  bool stillLife   = equalBoards(nextBoard, board);
+  bool periodTwo   = equalBoards(nextBoard, prevBoard);
+  bool deadFuture  = allDead(nextBoard);
+
+  if (stillLife || periodTwo || deadFuture) {
+    randomBoard(board);
+    clearBoard(prevBoard);
+  } else {
+    copyBoard(prevBoard, board);
+    copyBoard(board, nextBoard);
+  }
+
+  drawBoard(board);
+}
+
+void setup() {
+  lc.shutdown(0, false);
+  lc.setIntensity(0, 5);
+  lc.clearDisplay(0);
+  randomSeed(analogRead(A0));
+  clearBoard(board);
+  clearBoard(nextBoard);
+  clearBoard(prevBoard);
+  randomBoard(board);
+  drawBoard(board);
+}
+
+void loop() {
+  unsigned long now = millis();
+  if (now - lastStep >= STEP_DELAY) {
+    lastStep = now;
+    stepGame();
+  }
+}
