@@ -1,0 +1,322 @@
+//trebuie pe placa arduino mega inversate tabelel intre ele pentru un aspect vizual mai bun 
+#include <LedControl.h>
+
+#define DIN_PIN 11
+#define CS_PIN 10
+#define CLK_PIN 13
+LedControl lc = LedControl(DIN_PIN, CLK_PIN, CS_PIN, 8);
+
+#define BTN_UP 41
+#define BTN_DOWN 47
+#define BTN_LEFT 43
+#define BTN_RIGHT 45
+
+#define DATA_PIN 9
+#define LATCH_PIN 8
+#define CLOCK_PIN 7
+
+#define BUZZER_PIN 49
+
+#define BOARD_WIDTH 16
+#define BOARD_HEIGHT 32
+#define SPAWN_X 7
+#define SPAWN_Y 0
+
+byte board[BOARD_HEIGHT][BOARD_WIDTH];
+byte ledState[BOARD_HEIGHT][BOARD_WIDTH] = {0};
+
+int currentPiece = 0;
+int currentRotation = 0;
+int currentX = SPAWN_X;
+int currentY = SPAWN_Y;
+
+unsigned long lastFall = 0;
+unsigned long fallDelay = 2000;
+
+bool gameOver = false;
+bool gameOverPrinted = false;
+
+int score = 0;
+
+bool lastBtnUp = HIGH;
+bool lastBtnDown = HIGH;
+bool lastBtnLeft = HIGH;
+bool lastBtnRight = HIGH;
+
+unsigned long ignoreButtonsUntil = 0;
+unsigned long ignoreSerialUntil = 0;
+
+const int pieces[7][4][4][2] PROGMEM = {
+  {{{0,1},{1,1},{2,1},{3,1}},{{1,0},{1,1},{1,2},{1,3}},{{0,1},{1,1},{2,1},{3,1}},{{1,0},{1,1},{1,2},{1,3}}},
+  {{{0,0},{1,0},{0,1},{1,1}},{{0,0},{1,0},{0,1},{1,1}},{{0,0},{1,0},{0,1},{1,1}},{{0,0},{1,0},{0,1},{1,1}}},
+  {{{1,0},{0,1},{1,1},{2,1}},{{1,0},{1,1},{2,1},{1,2}},{{0,1},{1,1},{2,1},{1,2}},{{1,0},{0,1},{1,1},{1,2}}},
+  {{{1,0},{2,0},{0,1},{1,1}},{{1,0},{1,1},{2,1},{2,2}},{{1,0},{2,0},{0,1},{1,1}},{{1,0},{1,1},{2,1},{2,2}}},
+  {{{0,0},{1,0},{1,1},{2,1}},{{2,0},{1,1},{2,1},{1,2}},{{0,0},{1,0},{1,1},{2,1}},{{2,0},{1,1},{2,1},{1,2}}},
+  {{{0,0},{0,1},{1,1},{2,1}},{{1,0},{2,0},{1,1},{1,2}},{{0,1},{1,1},{2,1},{2,2}},{{1,0},{1,1},{0,2},{1,2}}},
+  {{{2,0},{0,1},{1,1},{2,1}},{{1,0},{1,1},{1,2},{2,2}},{{0,1},{1,1},{2,1},{0,2}},{{0,0},{1,0},{1,1},{1,2}}}
+};
+
+const int gameOverMelody[] PROGMEM = {262,247,220,208,196,185,175,165};
+const int gameOverDurations[] PROGMEM = {200,200,200,200,200,200,200,400};
+
+unsigned long toneUntil = 0;
+int currentToneFreq = 0;
+
+void updateSound() {
+  if (currentToneFreq != 0 && millis() > toneUntil) {
+    noTone(BUZZER_PIN);
+    currentToneFreq = 0;
+  }
+}
+
+void playToneNB(int freq, int duration) {
+  tone(BUZZER_PIN, freq);
+  currentToneFreq = freq;
+  toneUntil = millis() + duration;
+}
+
+void playMoveSound()      { playToneNB(440, 50); }
+void playRotateSound()    { playToneNB(550, 70); }
+void playDropSound()      { playToneNB(300, 80); }
+void playLineClearSound() { playToneNB(850, 120); }
+
+bool gameOverSoundPlayed = false;
+
+void playGameOverMelody() {
+  if (gameOverSoundPlayed) return;
+  gameOverSoundPlayed = true;
+  playToneNB(200, 600);
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(BTN_UP, INPUT);
+  pinMode(BTN_DOWN, INPUT);
+  pinMode(BTN_LEFT, INPUT);
+  pinMode(BTN_RIGHT, INPUT);
+
+  pinMode(DATA_PIN, OUTPUT);
+  pinMode(LATCH_PIN, OUTPUT);
+  pinMode(CLOCK_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  for (int i=0; i<8; i++) {
+    lc.shutdown(i, false);
+    lc.setIntensity(i, 8);
+    lc.clearDisplay(i);
+  }
+
+  for(int y=0;y<BOARD_HEIGHT;y++)
+    for(int x=0;x<BOARD_WIDTH;x++)
+      board[y][x]=0;
+
+  spawnNewPiece();
+
+  ignoreButtonsUntil = millis() + 300;
+  ignoreSerialUntil = millis() + 500;
+}
+
+void loop() {
+  updateSound();
+
+  if (Serial.available() && millis() > ignoreSerialUntil) {
+    char key = Serial.read();
+
+    if (key=='a') { if(movePiece(-1,0)) playMoveSound(); }
+    else if (key=='d') { if(movePiece(1,0)) playMoveSound(); }
+    else if (key=='w') { if(rotatePiece()) playRotateSound(); }
+    else if (key=='s') { if(movePiece(0,1)) playMoveSound(); }
+    else if (key==' ') {
+      while (movePiece(0,1)) score++;
+      playDropSound();
+      lockPiece();
+      clearLines();
+      spawnNewPiece();
+    }
+  }
+
+  if (gameOver) {
+    if (!gameOverPrinted) {
+      Serial.println("GAME OVER!");
+      Serial.print("Final Score: ");
+      Serial.println(score);
+      gameOverPrinted = true;
+    }
+    displayGameOver();
+    return;
+  }
+
+  handleInput();
+  updateDisplay();
+  updateScoreDisplay();
+
+  if (millis() - lastFall > fallDelay) {
+    lastFall = millis();
+    if (!movePiece(0, 1)) {
+      lockPiece();
+      clearLines();
+      spawnNewPiece();
+    } else {
+      score++;
+    }
+  }
+}
+
+void spawnNewPiece() {
+  currentPiece = random(7);
+  currentRotation = 0;
+  currentX = SPAWN_X;
+  currentY = SPAWN_Y;
+
+  lastFall = millis() + 800;
+
+  if (!canPlace(currentX, currentY, currentPiece, currentRotation)) {
+    gameOver = true;
+    playGameOverMelody();
+  }
+}
+
+bool canPlace(int x,int y,int piece,int rotation) {
+  for(int i=0;i<4;i++){
+    int px=x+pgm_read_word(&pieces[piece][rotation][i][0]);
+    int py=y+pgm_read_word(&pieces[piece][rotation][i][1]);
+    if(px<0||px>=BOARD_WIDTH||py>=BOARD_HEIGHT) return false;
+    if(py>=0 && board[py][px]) return false;
+  }
+  return true;
+}
+
+bool movePiece(int dx,int dy){
+  int nx=currentX+dx;
+  int ny=currentY+dy;
+  if(canPlace(nx,ny,currentPiece,currentRotation)){
+    currentX=nx;
+    currentY=ny;
+    return true;
+  }
+  return false;
+}
+
+bool rotatePiece(){
+  int nr=(currentRotation+1)%4;
+  if(canPlace(currentX,currentY,currentPiece,nr)){
+    currentRotation=nr;
+    return true;
+  }
+  return false;
+}
+
+void lockPiece() {
+  for(int i=0;i<4;i++){
+    int px=currentX+pgm_read_word(&pieces[currentPiece][currentRotation][i][0]);
+    int py=currentY+pgm_read_word(&pieces[currentPiece][currentRotation][i][1]);
+    if(py>=0 && py<BOARD_HEIGHT && px>=0 && px<BOARD_WIDTH)
+      board[py][px]=1;
+  }
+}
+
+void clearLines() {
+  int lines=0;
+  for(int y=BOARD_HEIGHT-1;y>=0;y--){
+    bool full=true;
+    for(int x=0;x<BOARD_WIDTH;x++)
+      if(!board[y][x]) full=false;
+    if(full){
+      lines++;
+      for(int yy=y;yy>0;yy--)
+        for(int x=0;x<BOARD_WIDTH;x++)
+          board[yy][x]=board[yy-1][x];
+      for(int x=0;x<BOARD_WIDTH;x++)
+        board[0][x]=0;
+      y++;
+    }
+  }
+  if(lines>0) {
+    score+=lines*10;
+    playLineClearSound();
+  }
+}
+
+void handleInput() {
+  bool up   = digitalRead(BTN_UP);
+  bool down = digitalRead(BTN_DOWN);
+  bool left = digitalRead(BTN_LEFT);
+  bool right= digitalRead(BTN_RIGHT);
+
+  if (millis() < ignoreButtonsUntil) {
+    lastBtnUp    = up;
+    lastBtnDown  = down;
+    lastBtnLeft  = left;
+    lastBtnRight = right;
+    return;
+  }
+
+  if (up == LOW && lastBtnUp == HIGH) {
+    if (rotatePiece()) playRotateSound();
+  }
+
+  if (down == LOW && lastBtnDown == HIGH) {
+    while (movePiece(0, 1)) score++;
+    playDropSound();
+    lockPiece();
+    clearLines();
+    spawnNewPiece();
+  }
+
+  if (left == LOW && lastBtnLeft == HIGH) {
+    if (movePiece(-1, 0)) playMoveSound();
+  }
+
+  if (right == LOW && lastBtnRight == HIGH) {
+    if (movePiece(1, 0)) playMoveSound();
+  }
+
+  lastBtnUp    = up;
+  lastBtnDown  = down;
+  lastBtnLeft  = left;
+  lastBtnRight = right;
+}
+
+void updateDisplay() {
+  for(int y=0;y<BOARD_HEIGHT;y++)
+    for(int x=0;x<BOARD_WIDTH;x++)
+      setPixel(x,y,board[y][x]);
+
+  for(int i=0;i<4;i++){
+    int px=currentX+pgm_read_word(&pieces[currentPiece][currentRotation][i][0]);
+    int py=currentY+pgm_read_word(&pieces[currentPiece][currentRotation][i][1]);
+    if(px>=0&&px<BOARD_WIDTH&&py>=0&&py<BOARD_HEIGHT)
+      setPixel(px,py,true);
+  }
+}
+
+void setPixel(int x,int y,bool state){
+  if(ledState[y][x]==state) return;
+  ledState[y][x]=state;
+
+  int blockY=y/8;
+  int localY=y%8;
+
+  int module;
+  int lx,ly;
+
+  if(x<8){
+    module=7-blockY;
+    lx=7-localY;
+    ly=x;
+  }else{
+    module=blockY;
+    lx=localY;
+    ly=7-(x-8);
+  }
+
+  lc.setLed(module,ly,lx,state);
+}
+
+void updateScoreDisplay(){}
+
+void displayGameOver(){
+  for(int i=0;i<8;i++)
+    lc.clearDisplay(i);
+}
